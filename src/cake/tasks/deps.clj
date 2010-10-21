@@ -5,9 +5,11 @@
         [cake.project :only [group log]])
   (:import [java.io File]
            [org.apache.tools.ant.taskdefs Copy Delete ExecTask Move Property]
-           [org.apache.ivy.ant IvyConfigure IvyCleanCache IvyReport IvyResolve IvyRetrieve
-            IvyDeliver IvyPublish IvyMakePom IvyInstall IvyMakePom$Mapping]
-           [org.apache.ivy.plugins.parser.xml XmlModuleDescriptorParser]
+           [org.apache.ivy.ant
+            AntMessageLogger IvyAntSettings IvyCleanCache
+            IvyConfigure IvyDeliver IvyInstall
+            IvyMakePom IvyMakePom$Mapping IvyPublish
+            IvyReport IvyResolve IvyRetrieve]
            [org.apache.ivy.plugins.resolver IBiblioResolver]))
 
 (def *exclusions* nil)
@@ -38,6 +40,11 @@
           "amd64" "x86_64"
           "i386"  "x86"
           arch))))
+
+(defn extract-native [jars dest]
+  (doseq [jar jars]
+    (ant Copy {:todir dest :flatten true}
+         (add-zipfileset {:src jar :includes (format "native/%s/%s/*" (os-name) (os-arch))}))))
 
 (defn make-resolver
   "Creates a maven compatible ivy resolver from a lein/cake repository."
@@ -123,11 +130,6 @@
                  (dependencies (:dependencies project) "default->default")
                  (dependencies (:dev-dependencies project) "devel->default")]])))))
 
-(defn extract-native [jars dest]
-  (doseq [jar jars]
-    (ant Copy {:todir dest :flatten true}
-         (add-zipfileset {:src jar :includes (format "native/%s/%s/*" (os-name) (os-arch))}))))
-
 (defn retrieve-conf [conf dest]
   (ant IvyRetrieve {:conf conf :pattern (str dest "/" artifact-pattern) :sync true})
   (extract-native
@@ -159,17 +161,28 @@
     (doall (for [[k v] properties]
              (ant Property {:name k :value v})))))
 
-(deftask resolve
-  (let [properties     (ivy-properties *project*)
-        ivysettings    (:ivysettings *project*)
-        configure-opts (if ivysettings {:file ivysettings} {})
-        configure-task (ant IvyConfigure configure-opts)
-        settings       (.getReference *ant-project* "ivy.instance")
-        ivy            (.getConfiguredIvyInstance settings configure-task)]
-    (add-resolvers (.getSettings ivy) *project*)
-    (make-ivy *project*)
+(defn get-ivy
+  [task]
+  (-> (.getReference *ant-project* "ivy.instance")
+      (.getConfiguredIvyInstance task)))
+
+(deftask init-ivy
+  (ivy-properties *project*)
+  (let [settings (:ivysettings *project*)
+        options  (if settings {:file settings} {})
+        task     (ant IvyConfigure options)]
+    (-> (get-ivy task)
+        (.getSettings)
+        (add-resolvers *project*)))
+  (make-ivy *project*))
+
+(deftask resolve #{init-ivy}
+  (let [task (doto (make* IvyResolve {:showprogress false})
+               (.setTaskName (if *current-task* (name *current-task*) "null")))
+        ivy  (get-ivy task)]
+    (AntMessageLogger/register task ivy)
     (.setShowProgress (.getLoggerEngine ivy) false)
-    (ant IvyResolve {:showprogress false})))
+    (.execute task)))
 
 (deftask deps
   "Fetch dependencies and dev-dependencies. Use 'cake deps force' to refetch."
@@ -232,7 +245,7 @@
         options  (merge defaults (opts-to-ant *opts*))]
     (ant IvyPublish options)))
 
-(deftask install-module
+(deftask install-module #{init-ivy}
   "Installs a module from one repository to another."
   "By default this task installs from the public (maven)
    repository to your local repository.
@@ -257,7 +270,7 @@
         options (merge defaults (opts-to-ant *opts*))]
     (ant IvyInstall options)))
 
-(deftask clean-cache
+(deftask clean-cache #{init-ivy}
   "Cleans the ivy cache of all modules."
   "This is roughly equivelent to rm -rf ~/.m2 for maven users
    but deletes the ivy.cache.dir instead."
