@@ -79,31 +79,31 @@
      (map exclusion (concat *exclusions* (:exclusions opts)))]))
 
 (def default-confs
-     {:confs [{:name "master"}
-              {:name "default"}
-              {:name "devel" :visibility "private"}]})
+     {"master"  {}
+      "default" {}
+      "devel"   {:visibility "private"}})
 
 (defn configurations
   [project]
-  (let [confs (or (:configurations project) default-confs)]
+  (let [confs      (or (:configurations project) default-confs)
+        attributes [:defaultconf :defaultconfmapping :confmappingoverride]]
     [:configurations
-     (select-keys confs [:defaultconf :defaultconfmapping :confmappingoverride])
-     (for [conf (:confs confs)]
-       [:conf conf])]))
+     (select-keys confs attributes)
+     (for [[k v] (apply dissoc confs attributes)]
+       [:conf (merge v {:name k})])]))
 
 (defn default-pubs
   [project]
-  {:artifacts [{:name (:name project)
-                :type "jar"
-                :conf "master,default"}]})
+  {(:name project) {:type "jar" :conf "master,default"}})
 
 (defn publications
   [project]
-  (let [pubs (or (:publications project) (default-pubs project))]
+  (let [pubs (or (:publications project) (default-pubs project))
+        attributes [:defaultconf]]
     [:publications
-     (select-keys pubs [:defaultconf])
-     (for [artifact (:artifacts pubs)]
-       [:artifact artifact])]))
+     (select-keys pubs attributes)
+     (for [[k v] (apply dissoc pubs attributes)]
+       [:artifact (merge v {:name k})])]))
 
 (defn make-ivy
   [project]
