@@ -6,7 +6,7 @@
   (:import [java.io File]
            [org.apache.tools.ant.taskdefs Copy Delete ExecTask Move Property]
            [org.apache.ivy.ant
-            AntMessageLogger IvyAntSettings IvyCleanCache
+            AntMessageLogger IvyAntSettings IvyCacheFileset IvyCleanCache
             IvyConfigure IvyDeliver IvyInstall
             IvyMakePom IvyMakePom$Mapping IvyPublish
             IvyReport IvyResolve IvyRetrieve]
@@ -106,8 +106,8 @@
        [:artifact (merge v {:name k})])]))
 
 (defn make-ivy
-  [project]
-  (with-open [out (writer "ivy.xml")]
+  [project path]
+  (with-open [out (writer path)]
     (binding [*prxml-indent* 2
               *out* out]
       (let [description (:description project)
@@ -166,23 +166,31 @@
   (-> (.getReference *ant-project* "ivy.instance")
       (.getConfiguredIvyInstance task)))
 
-(deftask init-ivy
-  (ivy-properties *project*)
-  (let [settings (:ivysettings *project*)
+(defn init-ivy-settings
+  [project]
+  (ivy-properties project)
+  (let [settings (:ivysettings project)
         options  (if settings {:file settings} {})
         task     (ant IvyConfigure options)]
     (-> (get-ivy task)
         (.getSettings)
-        (add-resolvers *project*)))
-  (make-ivy *project*))
+        (add-resolvers project))))
 
-(deftask resolve #{init-ivy}
-  (let [task (doto (make* IvyResolve {:showprogress false})
+(deftask init-ivy
+  (init-ivy-settings *project*)
+  (make-ivy *project* "ivy.xml"))
+
+(defn ivy-resolve
+  [path]
+  (let [task (doto (make* IvyResolve {:showprogress false :file path})
                (.setTaskName (if *current-task* (name *current-task*) "null")))
         ivy  (get-ivy task)]
     (AntMessageLogger/register task ivy)
     (.setShowProgress (.getLoggerEngine ivy) false)
     (.execute task)))
+
+(deftask resolve #{init-ivy}
+  (ivy-resolve "ivy.xml"))
 
 (deftask deps
   "Fetch dependencies and dev-dependencies. Use 'cake deps force' to refetch."
@@ -275,3 +283,9 @@
   "This is roughly equivelent to rm -rf ~/.m2 for maven users
    but deletes the ivy.cache.dir instead."
   (ant IvyCleanCache {}))
+
+(defn cache-fileset
+  "Returns a fileset of all dependencies in a given configuration."
+  [id confs types]
+  (ant IvyCacheFileset {:setid id :conf confs :type types})
+  (.getReference *ant-project* id))
